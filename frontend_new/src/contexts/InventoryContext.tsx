@@ -22,13 +22,15 @@ export type RecordUsageResult =
 { ok: true;transaction: Transaction;} |
 { ok: false;error: string;};
 
+export type SaveChemicalResult = { ok: true } | { ok: false; error: string };
+
 interface InventoryContextValue {
   chemicals: Chemical[];
   transactions: Transaction[];
   alerts: InventoryAlert[];
   backendReady: boolean;
   getChemical: (id: string) => Chemical | undefined;
-  saveChemical: (chemical: Chemical) => void;
+  saveChemical: (chemical: Chemical) => Promise<SaveChemicalResult>;
   removeChemical: (id: string) => void;
   recordUsage: (input: RecordUsageInput) => Promise<RecordUsageResult>;
   acknowledgeAlert: (id: string) => void;
@@ -40,6 +42,34 @@ const InventoryContext = createContext<InventoryContextValue | null>(null);
 /** Matches a mock chemical to its backend row by name + CAS number. */
 function backendKey(name: string, cas: string | null | undefined): string {
   return `${name.trim().toLowerCase()}|${(cas ?? '').trim().toLowerCase()}`;
+}
+
+/** Builds a register entry for a backend chemical that has no matching seed
+ *  entry (i.e. one added through the app rather than pre-loaded mock data).
+ *  Fields the backend doesn't track get a neutral placeholder. */
+function mapBackendOnlyChemical(bc: BackendChemical): Chemical {
+  return {
+    id: `CHM-B${bc.id}`,
+    name: bc.name,
+    casNumber: bc.cas_number ?? '',
+    formula: '',
+    category: (bc.category as Chemical['category']) || 'Reagent',
+    hazards: bc.hazard_level ? [bc.hazard_level as Chemical['hazards'][number]] : [],
+    quantity: bc.quantity ?? 0,
+    unit: bc.unit ?? '',
+    minQuantity: 0,
+    containerCount: 1,
+    location: bc.location ?? 'Unassigned',
+    storage: '—',
+    supplier: '—',
+    lotNumber: '—',
+    grade: '—',
+    receivedDate: new Date().toISOString().slice(0, 10),
+    expiryDate: bc.expiry_date ?? '9999-12-31',
+    unitCost: 0,
+    custodian: '—',
+    backendId: bc.id
+  };
 }
 
 function mapBackendTransaction(bt: BackendTransaction, chemical: Chemical): Transaction {
@@ -97,15 +127,26 @@ export function InventoryProvider({ children }: {children: React.ReactNode;}) {
 
       let mergedChemicals: Chemical[] = [];
       setChemicals((prev) => {
+        const matchedKeys = new Set<string>();
         mergedChemicals = prev.map((c) => {
-          const match = backendByKey.get(backendKey(c.name, c.casNumber));
+          const key = backendKey(c.name, c.casNumber);
+          const match = backendByKey.get(key);
           if (!match) return c;
+          matchedKeys.add(key);
           return {
             ...c,
             backendId: match.id,
             quantity: match.quantity ?? c.quantity
           };
         });
+
+        // Chemicals that exist only in the backend (added through the app,
+        // not part of the mock seed data) would otherwise vanish from the
+        // register on every reload — add them in too.
+        const backendOnly = backendChemicals.
+        filter((bc) => !matchedKeys.has(backendKey(bc.name, bc.cas_number))).
+        map(mapBackendOnlyChemical);
+        mergedChemicals = [...backendOnly, ...mergedChemicals];
         return mergedChemicals;
       });
 
@@ -142,15 +183,64 @@ export function InventoryProvider({ children }: {children: React.ReactNode;}) {
     [chemicals]
   );
 
-  const saveChemical = useCallback((chemical: Chemical) => {
-    setChemicals((prev) => {
-      const index = prev.findIndex((c) => c.id === chemical.id);
-      if (index === -1) return [chemical, ...prev];
-      const next = [...prev];
-      next[index] = chemical;
-      return next;
-    });
-  }, []);
+  const saveChemical = useCallback(
+    async (chemical: Chemical): Promise<SaveChemicalResult> => {
+      const isNew = !chemicals.some((c) => c.id === chemical.id);
+
+      // Editing an existing register entry stays local-only, as before —
+      // only newly-added chemicals need to be persisted and get an initial
+      // "Received" transaction.
+      if (!isNew) {
+        setChemicals((prev) => {
+          const index = prev.findIndex((c) => c.id === chemical.id);
+          if (index === -1) return [chemical, ...prev];
+          const next = [...prev];
+          next[index] = chemical;
+          return next;
+        });
+        return { ok: true };
+      }
+
+      if (!user) {
+        return { ok: false, error: 'You must be signed in to add a chemical.' };
+      }
+
+      let created;
+      try {
+        created = await api.createChemical({
+          name: chemical.name,
+          cas_number: chemical.casNumber || null,
+          category: chemical.category,
+          quantity: chemical.quantity,
+          unit: chemical.unit,
+          location: chemical.location,
+          expiry_date: chemical.expiryDate || null,
+          hazard_level: chemical.hazards[0] ?? null,
+          performed_by: user.fullName
+        });
+      } catch (err) {
+        return {
+          ok: false,
+          error: err instanceof Error ? err.message : 'Failed to save the chemical.'
+        };
+      }
+
+      const saved: Chemical = {
+        ...chemical,
+        backendId: created.chemical.id,
+        quantity: created.chemical.quantity ?? chemical.quantity
+      };
+
+      setChemicals((prev) => [saved, ...prev]);
+
+      if (created.transaction) {
+        setTransactions((prev) => [mapBackendTransaction(created.transaction!, saved), ...prev]);
+      }
+
+      return { ok: true };
+    },
+    [chemicals, user]
+  );
 
   const removeChemical = useCallback((id: string) => {
     setChemicals((prev) => prev.filter((c) => c.id !== id));

@@ -70,9 +70,34 @@ export function ChemicalForm() {
     () => existing ?? emptyChemical(nextId())
   );
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [submitting, setSubmitting] = useState(false);
+
+  // Numeric fields are typed as free text so users can enter values like
+  // "250.5" without React's controlled re-render stripping the trailing
+  // decimal point as they type; the text is parsed into `draft` as it goes.
+  const [quantityText, setQuantityText] = useState(() => String(draft.quantity));
+  const [minQuantityText, setMinQuantityText] = useState(() => String(draft.minQuantity));
 
   const set = <K extends keyof Chemical,>(key: K, value: Chemical[K]) =>
   setDraft((prev) => ({ ...prev, [key]: value }));
+
+  const handleNumericInput = (
+  key: 'quantity' | 'minQuantity',
+  setText: (value: string) => void) =>
+  (e: React.ChangeEvent<HTMLInputElement>) => {
+    const raw = e.target.value;
+    setText(raw);
+    const parsed = Number(raw);
+    if (raw.trim() !== '' && Number.isFinite(parsed)) {
+      set(key, parsed);
+    } else if (raw.trim() === '') {
+      set(key, 0);
+    }
+  };
+
+  const handleNumericBlur = (value: number, setText: (value: string) => void) => () => {
+    setText(String(value));
+  };
 
   const toggleHazard = (hazard: HazardClass) =>
   setDraft((prev) => ({
@@ -87,7 +112,7 @@ export function ChemicalForm() {
     [draft.quantity, draft.minQuantity]
   );
 
-  const handleSubmit = (event: React.FormEvent) => {
+  const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     const next: Record<string, string> = {};
     if (!draft.name.trim()) next.name = 'Chemical name is required';
@@ -98,7 +123,14 @@ export function ChemicalForm() {
     if (draft.hazards.length === 0) next.hazards = 'Select at least one hazard class';
     setErrors(next);
     if (Object.keys(next).length > 0) return;
-    saveChemical(draft);
+
+    setSubmitting(true);
+    const result = await saveChemical(draft);
+    setSubmitting(false);
+    if (!result.ok) {
+      setErrors({ form: result.error });
+      return;
+    }
     navigate(`/inventory/${draft.id}`);
   };
 
@@ -237,12 +269,14 @@ export function ChemicalForm() {
               <TextInput
                 id="quantity"
                 type="number"
+                inputMode="decimal"
                 min={0}
                 step="0.01"
-                value={draft.quantity}
-                onChange={(e) => set('quantity', Number(e.target.value))}
+                value={quantityText}
+                onChange={handleNumericInput('quantity', setQuantityText)}
+                onBlur={handleNumericBlur(draft.quantity, setQuantityText)}
                 className="tabular" />
-              
+
             </Field>
             <Field label="Unit" htmlFor="unit">
               <SelectInput
@@ -265,12 +299,14 @@ export function ChemicalForm() {
               <TextInput
                 id="min"
                 type="number"
+                inputMode="decimal"
                 min={0}
                 step="0.01"
-                value={draft.minQuantity}
-                onChange={(e) => set('minQuantity', Number(e.target.value))}
+                value={minQuantityText}
+                onChange={handleNumericInput('minQuantity', setMinQuantityText)}
+                onBlur={handleNumericBlur(draft.minQuantity, setMinQuantityText)}
                 className="tabular" />
-              
+
             </Field>
             <Field label="Container count" htmlFor="containers">
               <TextInput
@@ -392,13 +428,17 @@ export function ChemicalForm() {
           </FormSection>
         </Panel>
 
+        {errors.form &&
+        <p className="mt-4 text-sm text-rose-600">{errors.form}</p>
+        }
+
         <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
           <Button type="button" onClick={() => navigate(editing ? `/inventory/${id}` : '/inventory')}>
             Cancel
           </Button>
-          <Button type="submit" variant="primary">
+          <Button type="submit" variant="primary" disabled={submitting}>
             <SaveIcon className="h-4 w-4" aria-hidden="true" />
-            {editing ? 'Save changes' : 'Add to register'}
+            {submitting ? 'Saving…' : editing ? 'Save changes' : 'Add to register'}
           </Button>
         </div>
       </form>

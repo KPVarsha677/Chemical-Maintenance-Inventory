@@ -46,6 +46,25 @@ export interface UsageResult {
   chemical: BackendChemical;
 }
 
+export interface ChemicalCreatePayload {
+  name: string;
+  cas_number?: string | null;
+  category?: string | null;
+  safety_classification?: string | null;
+  quantity?: number | null;
+  unit?: string | null;
+  location?: string | null;
+  expiry_date?: string | null;
+  hazard_level?: string | null;
+  /** Attributes the initial "Received" transaction; not stored on the chemical itself. */
+  performed_by?: string | null;
+}
+
+export interface ChemicalCreateResult {
+  chemical: BackendChemical;
+  transaction: BackendTransaction | null;
+}
+
 class ApiError extends Error {}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -77,6 +96,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   listChemicals: () => request<BackendChemical[]>('/chemicals'),
   listTransactions: () => request<BackendTransaction[]>('/transactions'),
+  createChemical: (payload: ChemicalCreatePayload) =>
+  request<ChemicalCreateResult>('/chemicals', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  }),
   recordUsage: (chemicalId: number, payload: UsagePayload) =>
   request<UsageResult>(`/chemicals/${chemicalId}/usage`, {
     method: 'POST',

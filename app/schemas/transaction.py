@@ -37,3 +37,11 @@ class UsageResult(BaseModel):
 
     transaction: Transaction
     chemical: Chemical
+
+
+class ChemicalCreateResult(BaseModel):
+    """Returned after adding a chemical: the new record plus its initial "Received"
+    transaction, if a positive starting quantity was supplied."""
+
+    chemical: Chemical
+    transaction: Transaction | None = None

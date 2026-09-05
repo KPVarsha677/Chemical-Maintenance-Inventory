@@ -16,7 +16,9 @@ class ChemicalBase(BaseModel):
 
 
 class ChemicalCreate(ChemicalBase):
-    pass
+    # Not stored on the chemicals row; used only to attribute the initial
+    # "Received" transaction logged when a positive quantity is supplied.
+    performed_by: str | None = None
 
 
 class ChemicalUpdate(BaseModel):
